@@ -1,0 +1,181 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cross-tool-memory-mcp"
+version = "0.1.0"
+description = "A locally-hosted MCP server providing intelligent, persistent memory storage across AI development tools"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+authors = [
+    {name = "Developer", email = "developer@example.com"}
+]
+keywords = ["mcp", "memory", "ai-tools", "claude", "cursor", "kiro"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+
+dependencies = [
+    # Core MCP and web framework
+    "mcp>=1.0.0",
+    "fastapi>=0.104.0",
+    "uvicorn[standard]>=0.24.0",
+    
+    # Database and ORM
+    "sqlalchemy>=2.0.0",
+    "aiosqlite>=0.19.0",
+    
+    # AI/ML dependencies for semantic search
+    "sentence-transformers>=2.2.0",
+    "faiss-cpu>=1.7.4",
+    "torch>=2.0.0",
+    "transformers>=4.30.0",
+    
+    # Data processing and validation
+    "pydantic>=2.0.0",
+    "numpy>=1.24.0",
+    "pandas>=2.0.0",
+    
+    # Configuration and utilities
+    "pyyaml>=6.0",
+    "python-dotenv>=1.0.0",
+    "cryptography>=41.0.0",
+    "watchdog>=3.0.0",
+    "packaging>=23.0",
+    "requests>=2.31.0",
+    
+    # Logging and monitoring
+    "structlog>=23.0.0",
+    
+    # Optional NLP enhancements
+    "spacy>=3.6.0",
+    "scikit-learn>=1.3.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.1.0",
+    "black>=23.0.0",
+    "isort>=5.12.0",
+    "flake8>=6.0.0",
+    "mypy>=1.5.0",
+    "pre-commit>=3.4.0",
+]
+
+test = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.1.0",
+    "httpx>=0.25.0",  # For testing FastAPI endpoints
+    "factory-boy>=3.3.0",  # For test data generation
+]
+
+examples = [
+    "httpx>=0.25.0",  # For REST API client examples
+]
+
+[project.urls]
+Homepage = "https://github.com/example/cross-tool-memory-mcp"
+Repository = "https://github.com/example/cross-tool-memory-mcp"
+Issues = "https://github.com/example/cross-tool-memory-mcp/issues"
+
+[project.scripts]
+cross-tool-memory = "cross_tool_memory.main:main"
+cross-tool-memory-config = "cross_tool_memory.config.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+cross_tool_memory = ["py.typed"]
+
+# Black configuration
+[tool.black]
+line-length = 88
+target-version = ['py39']
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  # directories
+  \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | build
+  | dist
+)/
+'''
+
+# isort configuration
+[tool.isort]
+profile = "black"
+multi_line_output = 3
+line_length = 88
+known_first_party = ["cross_tool_memory"]
+
+# MyPy configuration
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+warn_unreachable = true
+strict_equality = true
+
+[[tool.mypy.overrides]]
+module = [
+    "faiss.*",
+    "sentence_transformers.*",
+    "spacy.*",
+    "sklearn.*",
+]
+ignore_missing_imports = true
+
+# Pytest configuration
+[tool.pytest.ini_options]
+minversion = "7.0"
+addopts = "-ra -q --strict-markers --strict-config"
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+asyncio_mode = "auto"
+
+# Coverage configuration
+[tool.coverage.run]
+source = ["src"]
+omit = [
+    "*/tests/*",
+    "*/test_*.py",
+    "*/__pycache__/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+]
