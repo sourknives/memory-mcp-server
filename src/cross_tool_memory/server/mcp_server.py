@@ -8,8 +8,10 @@ intelligent memory storage and retrieval across AI development tools.
 import asyncio
 import json
 import logging
+import os
 import sys
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 from mcp.server import Server
@@ -75,195 +77,384 @@ class MCPMemoryServer:
         """Register MCP protocol handlers."""
         
         @self.server.list_tools()
-        async def handle_list_tools() -> ListToolsResult:
-            return await self._handle_list_tools()
+        async def handle_list_tools():
+            return [
+                Tool(
+                    name="store_context",
+                    description="Store conversation context and content for future retrieval",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "content": {"type": "string", "description": "The conversation content to store"},
+                            "tool_name": {"type": "string", "description": "Name of the AI tool"},
+                            "metadata": {"type": "object", "description": "Optional metadata"},
+                            "project_id": {"type": "string", "description": "Optional project ID"}
+                        },
+                        "required": ["content", "tool_name"]
+                    }
+                ),
+                Tool(
+                    name="search_memory",
+                    description="Search stored memories",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "query": {"type": "string", "description": "Search query"},
+                            "limit": {"type": "integer", "description": "Max results", "default": 10},
+                            "project_id": {"type": "string", "description": "Optional project ID"}
+                        },
+                        "required": ["query"]
+                    }
+                ),
+                Tool(
+                    name="get_conversation_history",
+                    description="Get conversation history for a specific tool",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "tool_name": {"type": "string", "description": "Tool name"},
+                            "hours": {"type": "integer", "description": "Hours to look back", "default": 24},
+                            "limit": {"type": "integer", "description": "Max results", "default": 20}
+                        },
+                        "required": ["tool_name"]
+                    }
+                ),
+                Tool(
+                    name="browse_recent_memories",
+                    description="Browse recent memories chronologically without needing to search",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "hours": {"type": "integer", "description": "Hours to look back", "default": 24},
+                            "limit": {"type": "integer", "description": "Max results", "default": 10},
+                            "tool_filter": {"type": "string", "description": "Optional tool name to filter by"}
+                        }
+                    }
+                ),
+                Tool(
+                    name="find_related_context",
+                    description="Find conversations related to a specific memory ID for context threading",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "memory_id": {"type": "string", "description": "ID of the memory to find related context for"},
+                            "limit": {"type": "integer", "description": "Max related results", "default": 5}
+                        },
+                        "required": ["memory_id"]
+                    }
+                )
+            ]
         
         @self.server.call_tool()
-        async def handle_call_tool(name: str, arguments: Dict[str, Any]) -> CallToolResult:
-            return await self._handle_call_tool(name, arguments)
+        async def handle_call_tool(name: str, arguments: Dict[str, Any]):
+            try:
+                if name == "store_context":
+                    content = arguments.get("content", "")
+                    tool_name = arguments.get("tool_name", "").lower()
+                    metadata = arguments.get("metadata", {})
+                    
+                    if not content or not tool_name:
+                        return [{
+                            "type": "text",
+                            "text": "❌ Missing required parameters: content and tool_name"
+                        }]
+                    
+                    # Store in database
+                    try:
+                        from ..models.schemas import ConversationCreate
+                        conversation_data = ConversationCreate(
+                            tool_name=tool_name,
+                            content=content,
+                            conversation_metadata=metadata,
+                            project_id=arguments.get("project_id"),
+                            tags=metadata.get("tags", [])
+                        )
+                        conversation = self.conversation_repo.create(conversation_data)
+                        
+                        # Add to search index
+                        search_metadata = {
+                            "conversation_id": conversation.id,
+                            "tool_name": tool_name,
+                            "project_id": conversation.project_id,
+                            "timestamp": conversation.timestamp.isoformat(),
+                            "tags": metadata.get("tags", [])
+                        }
+                        
+                        await self.search_engine.add_document(
+                            content=content,
+                            metadata=search_metadata,
+                            document_id=conversation.id
+                        )
+                        
+                        return [{
+                            "type": "text",
+                            "text": f"✅ Context stored successfully! ID: {conversation.id}, Tool: {tool_name}, Content: {content[:100]}..."
+                        }]
+                    except Exception as e:
+                        return [{
+                            "type": "text",
+                            "text": f"❌ Failed to store context: {str(e)}"
+                        }]
+                
+                elif name == "search_memory":
+                    query = arguments.get("query", "")
+                    limit = arguments.get("limit", 10)
+                    
+                    if not query:
+                        return [{
+                            "type": "text",
+                            "text": "❌ Missing required parameter: query"
+                        }]
+                    
+                    # Search in database
+                    try:
+                        # Try search engine first
+                        search_results = await self.search_engine.search(query=query, limit=limit)
+                        
+                        # If no results from search engine, try database keyword search
+                        if not search_results:
+                            conversations = self.conversation_repo.search_by_content(query, limit=limit)
+                            if conversations:
+                                results_text = f"🔍 Found {len(conversations)} results for '{query}' (database search):\\n\\n"
+                                for i, conv in enumerate(conversations[:3], 1):
+                                    # Show full content for better context preservation
+                                    preview = conv.content
+                                    
+                                    # Add rich metadata
+                                    metadata_info = ""
+                                    if conv.conversation_metadata:
+                                        metadata_info = f"\\n📋 Metadata: {json.dumps(conv.conversation_metadata, indent=2)}"
+                                    
+                                    tags_info = ""
+                                    if conv.tags:
+                                        tags_info = f"\\n🏷️  Tags: {', '.join(conv.tags_list)}"
+                                    
+                                    project_info = ""
+                                    if conv.project_id:
+                                        project_info = f"\\n📁 Project: {conv.project_id}"
+                                    
+                                    results_text += f"{i}. 🔗 ID: {conv.id}\\n📅 [{conv.tool_name}] {conv.timestamp.strftime('%Y-%m-%d %H:%M:%S')}{project_info}{tags_info}\\n\\n💬 Content:\\n{preview}{metadata_info}\\n\\n{'='*50}\\n\\n"
+                                if len(conversations) > 3:
+                                    results_text += f"... and {len(conversations) - 3} more results"
+                            else:
+                                results_text = f"🔍 No results found for '{query}'"
+                        else:
+                            results_text = f"🔍 Found {len(search_results)} results for '{query}' (search engine):\\n\\n"
+                            for i, result in enumerate(search_results[:3], 1):
+                                # Show full content for better context preservation
+                                preview = result.content
+                                
+                                # Extract rich metadata
+                                tool_name = result.metadata.get("tool_name", "unknown")
+                                timestamp = result.metadata.get("timestamp", "unknown")
+                                conv_id = result.metadata.get("conversation_id", "unknown")
+                                project_id = result.metadata.get("project_id")
+                                tags = result.metadata.get("tags", [])
+                                
+                                project_info = f"\\n📁 Project: {project_id}" if project_id else ""
+                                tags_info = f"\\n🏷️  Tags: {', '.join(tags)}" if tags else ""
+                                
+                                results_text += f"{i}. 🔗 ID: {conv_id}\\n📅 [{tool_name}] {timestamp}{project_info}{tags_info}\\n\\n💬 Content:\\n{preview}\\n\\n{'='*50}\\n\\n"
+                            if len(search_results) > 3:
+                                results_text += f"... and {len(search_results) - 3} more results"
+                        
+                        return [{
+                            "type": "text",
+                            "text": results_text
+                        }]
+                    except Exception as e:
+                        return [{
+                            "type": "text",
+                            "text": f"❌ Search failed: {str(e)}"
+                        }]
+                
+                elif name == "browse_recent_memories":
+                    hours = arguments.get("hours", 24)
+                    limit = arguments.get("limit", 10)
+                    tool_filter = arguments.get("tool_filter")
+                    
+                    try:
+                        # Get recent conversations across all tools or filtered by tool
+                        if tool_filter:
+                            conversations = self.conversation_repo.get_recent_by_tool(
+                                tool_name=tool_filter.lower(),
+                                hours=hours,
+                                limit=limit
+                            )
+                        else:
+                            # Get recent conversations from all tools by using a broad search
+                            from datetime import datetime, timedelta
+                            cutoff_time = datetime.now() - timedelta(hours=hours)
+                            
+                            with self.conversation_repo.db_manager.get_session() as session:
+                                from ..models.database import Conversation
+                                conversations = session.query(Conversation).filter(
+                                    Conversation.timestamp >= cutoff_time
+                                ).order_by(Conversation.timestamp.desc()).limit(limit).all()
+                        
+                        if conversations:
+                            browse_text = f"📚 Recent memories (last {hours}h):\\n\\n"
+                            for i, conv in enumerate(conversations, 1):
+                                # Show full content with rich context
+                                preview = conv.content
+                                
+                                metadata_info = ""
+                                if conv.conversation_metadata:
+                                    metadata_info = f"\\n📋 Metadata: {json.dumps(conv.conversation_metadata, indent=2)}"
+                                
+                                tags_info = ""
+                                if conv.tags:
+                                    tags_info = f"\\n🏷️  Tags: {', '.join(conv.tags_list)}"
+                                
+                                project_info = ""
+                                if conv.project_id:
+                                    project_info = f"\\n📁 Project: {conv.project_id}"
+                                
+                                browse_text += f"{i}. 🔗 ID: {conv.id}\\n📅 [{conv.tool_name}] {conv.timestamp.strftime('%Y-%m-%d %H:%M:%S')}{project_info}{tags_info}\\n\\n💬 Content:\\n{preview}{metadata_info}\\n\\n{'='*50}\\n\\n"
+                        else:
+                            browse_text = f"📚 No recent memories found in the last {hours} hours"
+                        
+                        return [{
+                            "type": "text",
+                            "text": browse_text
+                        }]
+                    except Exception as e:
+                        return [{
+                            "type": "text",
+                            "text": f"❌ Failed to browse memories: {str(e)}"
+                        }]
+                
+                elif name == "find_related_context":
+                    memory_id = arguments.get("memory_id", "")
+                    limit = arguments.get("limit", 5)
+                    
+                    if not memory_id:
+                        return [{
+                            "type": "text",
+                            "text": "❌ Missing required parameter: memory_id"
+                        }]
+                    
+                    try:
+                        # Get the original conversation
+                        original_conv = self.conversation_repo.get_by_id(memory_id)
+                        if not original_conv:
+                            return [{
+                                "type": "text",
+                                "text": f"❌ Memory with ID {memory_id} not found"
+                            }]
+                        
+                        # Find related conversations using content similarity
+                        related_results = await self.search_engine.search(
+                            query=original_conv.content[:200],  # Use first 200 chars as query
+                            limit=limit + 1  # +1 to account for the original
+                        )
+                        
+                        # Filter out the original conversation
+                        related_results = [r for r in related_results if r.metadata.get("conversation_id") != memory_id][:limit]
+                        
+                        if related_results:
+                            related_text = f"🔗 Found {len(related_results)} related conversations to memory {memory_id}:\\n\\n"
+                            related_text += f"📌 Original Memory:\\n🔗 ID: {original_conv.id}\\n📅 [{original_conv.tool_name}] {original_conv.timestamp.strftime('%Y-%m-%d %H:%M:%S')}\\n💬 {original_conv.content[:200]}...\\n\\n{'='*50}\\n\\n"
+                            
+                            for i, result in enumerate(related_results, 1):
+                                conv_id = result.metadata.get("conversation_id", "unknown")
+                                tool_name = result.metadata.get("tool_name", "unknown")
+                                timestamp = result.metadata.get("timestamp", "unknown")
+                                
+                                related_text += f"{i}. 🔗 ID: {conv_id}\\n📅 [{tool_name}] {timestamp}\\n💬 Content:\\n{result.content}\\n\\n{'='*50}\\n\\n"
+                        else:
+                            related_text = f"🔗 No related conversations found for memory {memory_id}"
+                        
+                        return [{
+                            "type": "text",
+                            "text": related_text
+                        }]
+                    except Exception as e:
+                        return [{
+                            "type": "text",
+                            "text": f"❌ Failed to find related context: {str(e)}"
+                        }]
+                
+                elif name == "get_conversation_history":
+                    tool_name = arguments.get("tool_name", "")
+                    hours = arguments.get("hours", 24)
+                    limit = arguments.get("limit", 20)
+                    
+                    if not tool_name:
+                        return [{
+                            "type": "text",
+                            "text": "❌ Missing required parameter: tool_name"
+                        }]
+                    
+                    # Get history from database
+                    try:
+                        conversations = self.conversation_repo.get_recent_by_tool(
+                            tool_name=tool_name.lower(),
+                            hours=hours,
+                            limit=limit
+                        )
+                        
+                        if conversations:
+                            history_text = f"📜 Found {len(conversations)} conversations for {tool_name} (last {hours}h):\\n\\n"
+                            for i, conv in enumerate(conversations[:3], 1):
+                                # Show full content for complete context
+                                preview = conv.content
+                                
+                                # Add rich metadata for context
+                                metadata_info = ""
+                                if conv.conversation_metadata:
+                                    metadata_info = f"\\n📋 Metadata: {json.dumps(conv.conversation_metadata, indent=2)}"
+                                
+                                tags_info = ""
+                                if conv.tags:
+                                    tags_info = f"\\n🏷️  Tags: {', '.join(conv.tags_list)}"
+                                
+                                project_info = ""
+                                if conv.project_id:
+                                    project_info = f"\\n📁 Project: {conv.project_id}"
+                                
+                                history_text += f"{i}. 🔗 ID: {conv.id}\\n📅 {conv.timestamp.strftime('%Y-%m-%d %H:%M:%S')}{project_info}{tags_info}\\n\\n💬 Content:\\n{preview}{metadata_info}\\n\\n{'='*50}\\n\\n"
+                            if len(conversations) > 3:
+                                history_text += f"... and {len(conversations) - 3} more conversations"
+                        else:
+                            history_text = f"📜 No conversations found for {tool_name} in the last {hours} hours"
+                        
+                        return [{
+                            "type": "text",
+                            "text": history_text
+                        }]
+                    except Exception as e:
+                        return [{
+                            "type": "text",
+                            "text": f"❌ Failed to get history: {str(e)}"
+                        }]
+                
+                else:
+                    return [{
+                        "type": "text",
+                        "text": f"❌ Unknown tool: {name}"
+                    }]
+                    
+            except Exception as e:
+                return [{
+                    "type": "text",
+                    "text": f"❌ Error executing {name}: {str(e)}"
+                }]
         
         @self.server.list_prompts()
         async def handle_list_prompts():
-            return {"prompts": []}  # No prompts implemented yet
+            return []  # No prompts implemented yet
         
         @self.server.list_resources()
         async def handle_list_resources():
-            return {"resources": []}  # No resources implemented yet
+            return []  # No resources implemented yet
     
-    async def _handle_list_tools(self) -> ListToolsResult:
-        """List available MCP tools."""
-        return ListToolsResult(
-                tools=[
-                    Tool(
-                        name="store_context",
-                        description="Store conversation context and content for future retrieval",
-                        inputSchema={
-                            "type": "object",
-                            "properties": {
-                                "content": {
-                                    "type": "string",
-                                    "description": "The conversation content to store"
-                                },
-                                "tool_name": {
-                                    "type": "string",
-                                    "description": "Name of the AI tool (e.g., 'claude', 'cursor', 'kiro')"
-                                },
-                                "metadata": {
-                                    "type": "object",
-                                    "description": "Optional metadata about the conversation",
-                                    "properties": {
-                                        "user_query": {"type": "string"},
-                                        "ai_response": {"type": "string"},
-                                        "file_path": {"type": "string"},
-                                        "project_name": {"type": "string"},
-                                        "code_snippets": {"type": "array", "items": {"type": "string"}},
-                                        "tags": {"type": "array", "items": {"type": "string"}}
-                                    }
-                                },
-                                "project_id": {
-                                    "type": "string",
-                                    "description": "Optional project ID to associate with this context"
-                                }
-                            },
-                            "required": ["content", "tool_name"]
-                        }
-                    ),
-                    Tool(
-                        name="retrieve_context",
-                        description="Search and retrieve relevant context based on a query",
-                        inputSchema={
-                            "type": "object",
-                            "properties": {
-                                "query": {
-                                    "type": "string",
-                                    "description": "Search query to find relevant context"
-                                },
-                                "project_id": {
-                                    "type": "string",
-                                    "description": "Optional project ID to scope the search"
-                                },
-                                "tool_name": {
-                                    "type": "string",
-                                    "description": "Optional tool name to filter results"
-                                },
-                                "limit": {
-                                    "type": "integer",
-                                    "description": "Maximum number of results to return (default: 10)",
-                                    "default": 10
-                                },
-                                "search_type": {
-                                    "type": "string",
-                                    "enum": ["semantic", "keyword", "hybrid"],
-                                    "description": "Type of search to perform (default: hybrid)",
-                                    "default": "hybrid"
-                                }
-                            },
-                            "required": ["query"]
-                        }
-                    ),
-                    Tool(
-                        name="get_project_context",
-                        description="Get all context and conversations for a specific project",
-                        inputSchema={
-                            "type": "object",
-                            "properties": {
-                                "project_id": {
-                                    "type": "string",
-                                    "description": "Project ID to get context for"
-                                },
-                                "limit": {
-                                    "type": "integer",
-                                    "description": "Maximum number of conversations to return (default: 50)",
-                                    "default": 50
-                                },
-                                "include_stats": {
-                                    "type": "boolean",
-                                    "description": "Whether to include project statistics (default: true)",
-                                    "default": True
-                                }
-                            },
-                            "required": ["project_id"]
-                        }
-                    ),
-                    Tool(
-                        name="update_preferences",
-                        description="Store or update user preferences",
-                        inputSchema={
-                            "type": "object",
-                            "properties": {
-                                "key": {
-                                    "type": "string",
-                                    "description": "Preference key"
-                                },
-                                "value": {
-                                    "type": "string",
-                                    "description": "Preference value"
-                                },
-                                "category": {
-                                    "type": "string",
-                                    "description": "Optional category for the preference"
-                                }
-                            },
-                            "required": ["key", "value"]
-                        }
-                    ),
-                    Tool(
-                        name="get_conversation_history",
-                        description="Get conversation history for a specific tool or timeframe",
-                        inputSchema={
-                            "type": "object",
-                            "properties": {
-                                "tool_name": {
-                                    "type": "string",
-                                    "description": "Tool name to get history for"
-                                },
-                                "hours": {
-                                    "type": "integer",
-                                    "description": "Number of hours to look back (default: 24)",
-                                    "default": 24
-                                },
-                                "limit": {
-                                    "type": "integer",
-                                    "description": "Maximum number of conversations to return (default: 20)",
-                                    "default": 20
-                                }
-                            },
-                            "required": ["tool_name"]
-                        }
-                    ),
-                    Tool(
-                        name="health_check",
-                        description="Check the health status of the memory system components",
-                        inputSchema={
-                            "type": "object",
-                            "properties": {
-                                "component": {
-                                    "type": "string",
-                                    "description": "Specific component to check (optional)",
-                                    "enum": ["database", "search_engine", "embedding_service", "vector_store"]
-                                },
-                                "detailed": {
-                                    "type": "boolean",
-                                    "description": "Whether to return detailed health information (default: false)",
-                                    "default": False
-                                }
-                            }
-                        }
-                    )
-                ]
-            )
-        
-        @self.server.call_tool()
-        async def handle_call_tool(name: str, arguments: Dict[str, Any]) -> CallToolResult:
-            return await self._handle_call_tool(name, arguments)
-    
-    @graceful_degradation(service_name="mcp_server")
     async def _handle_call_tool(self, name: str, arguments: Dict[str, Any]) -> CallToolResult:
         """Handle MCP tool calls with error handling."""
         try:
             if name == "store_context":
                 return await self._handle_store_context(arguments)
-            elif name == "retrieve_context":
+            elif name == "search_memory":
                 return await self._handle_retrieve_context(arguments)
             elif name == "get_project_context":
                 return await self._handle_get_project_context(arguments)
@@ -840,7 +1031,30 @@ async def main():
     for handler in root_logger.handlers[:]:
         root_logger.removeHandler(handler)
     
-    server = MCPMemoryServer()
+    # Get database path from environment variable or use default
+    db_path = os.getenv("MEMORY_DB_PATH")
+    if not db_path:
+        # Default to user's home directory
+        data_dir = Path.home() / ".cross_tool_memory" / "data"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        db_path = str(data_dir / "memory.db")
+    else:
+        # Ensure the directory exists for the specified path
+        try:
+            db_dir = Path(db_path).parent
+            db_dir.mkdir(parents=True, exist_ok=True)
+            # Test write permissions by creating a temporary file
+            test_file = db_dir / ".test_write"
+            test_file.touch()
+            test_file.unlink()
+        except Exception as e:
+            # Fallback to home directory if specified path is not writable
+            print(f"Warning: Cannot write to {db_path}, using fallback location: {e}", file=sys.stderr)
+            data_dir = Path.home() / ".cross_tool_memory" / "data"
+            data_dir.mkdir(parents=True, exist_ok=True)
+            db_path = str(data_dir / "memory.db")
+    
+    server = MCPMemoryServer(db_path=db_path)
     
     try:
         await server.run()

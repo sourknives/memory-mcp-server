@@ -1,11 +1,13 @@
 # Cross-Tool Memory MCP Server Configuration
 
 server:
-  host: localhost
+  host: 0.0.0.0
   port: 8000
   debug: false
+  enable_web_ui: true
   cors_origins:
     - "http://localhost:3000"
+    - "http://localhost:8000"
     - "http://localhost:8080"
 
 database:
@@ -77,7 +79,7 @@ logging:
   
   # Structured logging for production
   structured:
-    enabled: false
+    enabled: true
     format: "json"
 
 monitoring:
@@ -86,9 +88,14 @@ monitoring:
     endpoint: "/health"
   
   metrics:
-    enabled: false
+    enabled: true
     endpoint: "/metrics"
     
   performance:
     track_query_time: true
     track_memory_usage: true
+  
+  web_ui:
+    enabled: true
+    endpoint: "/ui"
+    title: "Cross-Tool Memory Server"
