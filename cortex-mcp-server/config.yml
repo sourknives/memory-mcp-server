@@ -1,0 +1,102 @@
+# Cortex MCP Server Configuration
+
+server:
+  host: 0.0.0.0
+  port: 8000
+  debug: false
+  enable_web_ui: true
+  cors_origins:
+    - "http://localhost:3000"
+    - "http://localhost:8000"
+    - "http://localhost:8080"
+
+database:
+  path: "./data/memory.db"
+  pool_size: 10
+  max_overflow: 20
+  echo: false  # Set to true for SQL query logging
+
+ai_models:
+  embedding:
+    model_name: "all-MiniLM-L6-v2"
+    device: "cpu"
+    cache_dir: "./models"
+    max_seq_length: 512
+  
+  vector_store:
+    type: "faiss"
+    index_type: "IndexFlatIP"  # Inner product for cosine similarity
+    dimension: 384  # Dimension for all-MiniLM-L6-v2
+    
+  # Optional: Local LLM configuration
+  llm:
+    enabled: false
+    provider: "ollama"  # or "openai", "anthropic"
+    model: "llama3.2:1b"
+    host: "http://localhost:11434"
+
+security:
+  encryption:
+    enabled: true
+    key_file: "./data/encryption.key"
+    algorithm: "AES-256-GCM"
+  
+  api:
+    require_key: true
+    keys_file: "./data/api_keys.json"
+    rate_limit:
+      requests: 100
+      window: 60  # seconds
+  
+  cors:
+    allow_credentials: true
+    allow_methods: ["GET", "POST", "PUT", "DELETE"]
+    allow_headers: ["*"]
+
+memory:
+  retention:
+    default_days: 365
+    max_conversations: 100000
+  
+  search:
+    max_results: 50
+    similarity_threshold: 0.7
+    enable_keyword_fallback: true
+  
+  learning:
+    enabled: true
+    pattern_detection: true
+    preference_learning: true
+    feedback_weight: 0.1
+
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file:
+    enabled: true
+    path: "./logs/memory-server.log"
+    max_size: "10MB"
+    backup_count: 5
+  
+  # Structured logging for production
+  structured:
+    enabled: true
+    format: "json"
+
+monitoring:
+  health_check:
+    enabled: true
+    endpoint: "/health"
+  
+  metrics:
+    enabled: true
+    endpoint: "/metrics"
+    
+  performance:
+    track_query_time: true
+    track_memory_usage: true
+  
+  web_ui:
+    enabled: true
+    endpoint: "/ui"
+    title: "Cortex MCP Server"

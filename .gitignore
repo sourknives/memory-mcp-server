@@ -171,7 +171,12 @@ test_*.py
 *_test.py
 final_*.py
 working_*.py
-cross-tool-memory
+# Cortex MCP specific
+data/
+logs/
+models/
+exports/
+ssl/
 claude_desktop_config.json
 server.log
 *.log

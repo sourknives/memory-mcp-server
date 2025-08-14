@@ -1,0 +1,91 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cortex-mcp-client"
+version = "0.1.0"
+description = "Lightweight MCP client for connecting to remote Cortex MCP servers"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+authors = [
+    {name = "Developer", email = "developer@example.com"}
+]
+keywords = ["mcp", "client", "cortex", "ai-tools", "claude", "cursor", "kiro"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+
+dependencies = [
+    # Core MCP
+    "mcp>=1.0.0",
+    
+    # HTTP client
+    "httpx>=0.25.0",
+    
+    # JSON handling (built-in, but explicit for clarity)
+    # "json" - built-in
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "black>=23.0.0",
+    "isort>=5.12.0",
+    "mypy>=1.5.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/example/cortex-mcp"
+Repository = "https://github.com/example/cortex-mcp"
+Issues = "https://github.com/example/cortex-mcp/issues"
+
+[project.scripts]
+cortex-mcp-client = "cortex_mcp_client.main:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["cortex_mcp_client*"]
+
+[tool.setuptools.package-data]
+cortex_mcp_client = ["py.typed"]
+
+# Black configuration
+[tool.black]
+line-length = 88
+target-version = ['py39']
+
+# isort configuration
+[tool.isort]
+profile = "black"
+multi_line_output = 3
+line_length = 88
+known_first_party = ["cortex_mcp_client"]
+
+# MyPy configuration
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+strict_equality = true
+
+[[tool.mypy.overrides]]
+module = [
+    "httpx.*",
+]
+ignore_missing_imports = true

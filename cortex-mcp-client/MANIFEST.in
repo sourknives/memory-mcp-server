@@ -1,0 +1,5 @@
+include README.md
+include LICENSE
+include pyproject.toml
+recursive-include cortex_mcp_client *.py
+recursive-include cortex_mcp_client *.typed

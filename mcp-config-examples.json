@@ -1,0 +1,47 @@
+{
+  "remote_server": {
+    "description": "Connect to a remote Cortex MCP server (recommended)",
+    "requirements": "pip install cortex-mcp-client",
+    "config": {
+      "mcpServers": {
+        "cortex-mcp": {
+          "command": "cortex-mcp-client",
+          "args": [],
+          "env": {
+            "CORTEX_MCP_SERVER_URL": "https://your-server.com:8000",
+            "CORTEX_MCP_API_KEY": "your-api-key-here"
+          }
+        }
+      }
+    }
+  },
+  "local_server": {
+    "description": "Run Cortex MCP server locally",
+    "requirements": "cd cortex-mcp-server && pip install -e .",
+    "config": {
+      "mcpServers": {
+        "cortex-mcp": {
+          "command": "python",
+          "args": ["-m", "cortex_mcp.main", "--mode", "mcp"],
+          "cwd": "/path/to/cortex-mcp/cortex-mcp-server",
+          "env": {
+            "CORTEX_MCP_DB_PATH": "memory.db",
+            "CORTEX_MCP_LOG_LEVEL": "INFO"
+          }
+        }
+      }
+    }
+  },
+  "kiro_extensions": {
+    "description": "Additional Kiro IDE specific options",
+    "config": {
+      "disabled": false,
+      "autoApprove": [
+        "store_memory",
+        "retrieve_memories",
+        "search_memories",
+        "list_memories"
+      ]
+    }
+  }
+}
