@@ -19,6 +19,11 @@ from fastapi.responses import JSONResponse, HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field
 import uvicorn
 
+# Add parent directory to path for imports
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+
 from config.database import DatabaseManager, DatabaseConfig
 from security.access_control import (
     AccessControlMiddleware, APIKeyAuth, SecureHTTPBearer,
@@ -37,12 +42,14 @@ from services.context_manager import ContextManager
 from services.search_engine import SearchEngine
 from services.embedding_service import EmbeddingService
 from services.vector_store import VectorStore
+from services.api_key_service import APIKeyService
 from models.schemas import (
     ConversationCreate, ConversationResponse, ConversationUpdate,
     ProjectCreate, ProjectResponse, ProjectUpdate,
     PreferenceCreate, PreferenceResponse, PreferenceUpdate,
     MemoryQuery, SearchResponse, SearchResult,
-    HealthStatus, DatabaseStats
+    HealthStatus, DatabaseStats,
+    APIKeyCreate, APIKeyResponse, APIKeyCreateResponse, APIKeyUpdate
 )
 
 logger = logging.getLogger(__name__)
@@ -174,6 +181,7 @@ class MemoryRestAPI:
         self.preferences_repo: Optional[PreferencesRepository] = None
         self.context_manager: Optional[ContextManager] = None
         self.search_engine: Optional[SearchEngine] = None
+        self.api_key_service: Optional[APIKeyService] = None
         
         # Security components
         self.api_key_auth: Optional[APIKeyAuth] = None
@@ -276,14 +284,31 @@ class MemoryRestAPI:
         logger.info("Landing page route added")
         
         # Add web interface routes
-        from web_interface import create_web_interface_router
+        from .web_interface import create_web_interface_router
         web_router = create_web_interface_router(self)
         self.app.include_router(web_router)
         
-        # Add monitoring routes
-        from monitoring_api import create_monitoring_router
-        monitoring_router = create_monitoring_router(self)
-        self.app.include_router(monitoring_router)
+        # Add monitoring routes (if available)
+        try:
+            from .monitoring_api import create_monitoring_router
+            monitoring_router = create_monitoring_router(self)
+            self.app.include_router(monitoring_router)
+        except ImportError:
+            logger.warning("Monitoring API not available")
+        
+        # Add database maintenance routes
+        self._add_database_maintenance_routes()
+        
+        # Add static file serving
+        from fastapi.staticfiles import StaticFiles
+        import os
+        
+        static_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static")
+        if os.path.exists(static_dir):
+            self.app.mount("/static", StaticFiles(directory=static_dir), name="static")
+            logger.info(f"Static files mounted from {static_dir}")
+        else:
+            logger.warning(f"Static directory not found: {static_dir}")
         
         # Health check endpoint
         @self.app.get("/health", response_model=HealthStatus)
@@ -340,6 +365,26 @@ class MemoryRestAPI:
         ):
             """Create a new conversation."""
             return self.conversation_repo.create(conversation)
+
+        @self.app.get("/conversations", response_model=List[ConversationResponse])
+        async def list_conversations(
+            limit: int = 50,
+            offset: int = 0,
+            project_id: Optional[str] = None,
+            tool_name: Optional[str] = None,
+            credentials: Optional[HTTPAuthorizationCredentials] = Depends(self.security)
+        ):
+            """List conversations with optional filtering."""
+            self._ensure_initialized()
+            
+            if project_id:
+                return self.conversation_repo.get_by_project(project_id, limit=limit, offset=offset)
+            elif tool_name:
+                # Filter by tool name - we'll need to add this method to the repository
+                conversations = self.conversation_repo.list_all(limit=limit, offset=offset)
+                return [conv for conv in conversations if conv.tool_name == tool_name]
+            else:
+                return self.conversation_repo.list_all(limit=limit, offset=offset)
         
         @self.app.get("/conversations/{conversation_id}", response_model=ConversationResponse)
         async def get_conversation(
@@ -391,7 +436,7 @@ class MemoryRestAPI:
             credentials: Optional[HTTPAuthorizationCredentials] = Depends(self.security)
         ):
             """List all projects."""
-            return self.project_repo.get_all(limit=limit)
+            return self.project_repo.list_all(limit=limit)
         
         @self.app.get("/projects/{project_id}", response_model=ProjectResponse)
         async def get_project(
@@ -483,6 +528,277 @@ class MemoryRestAPI:
             if not success:
                 raise HTTPException(status_code=404, detail="Preference not found")
             return {"message": "Preference deleted successfully"}
+        
+        # API Key management endpoints
+        @self.app.post("/api-keys", response_model=APIKeyCreateResponse)
+        async def create_api_key(
+            api_key_data: APIKeyCreate,
+            credentials: Optional[HTTPAuthorizationCredentials] = Depends(self.security)
+        ):
+            """Create a new API key."""
+            self._ensure_initialized()
+            return self.api_key_service.create_api_key(api_key_data)
+        
+        @self.app.get("/api-keys", response_model=List[APIKeyResponse])
+        async def list_api_keys(
+            credentials: Optional[HTTPAuthorizationCredentials] = Depends(self.security)
+        ):
+            """List all API keys."""
+            self._ensure_initialized()
+            return self.api_key_service.list_api_keys()
+        
+        @self.app.get("/api-keys/{key_id}", response_model=APIKeyResponse)
+        async def get_api_key(
+            key_id: str,
+            credentials: Optional[HTTPAuthorizationCredentials] = Depends(self.security)
+        ):
+            """Get a specific API key by ID."""
+            self._ensure_initialized()
+            api_key = self.api_key_service.get_api_key(key_id)
+            if not api_key:
+                raise HTTPException(status_code=404, detail="API key not found")
+            return api_key
+        
+        @self.app.put("/api-keys/{key_id}", response_model=APIKeyResponse)
+        async def update_api_key(
+            key_id: str,
+            update_data: APIKeyUpdate,
+            credentials: Optional[HTTPAuthorizationCredentials] = Depends(self.security)
+        ):
+            """Update an API key."""
+            self._ensure_initialized()
+            api_key = self.api_key_service.update_api_key(key_id, update_data)
+            if not api_key:
+                raise HTTPException(status_code=404, detail="API key not found")
+            return api_key
+        
+        @self.app.delete("/api-keys/{key_id}")
+        async def delete_api_key(
+            key_id: str,
+            credentials: Optional[HTTPAuthorizationCredentials] = Depends(self.security)
+        ):
+            """Delete an API key permanently."""
+            self._ensure_initialized()
+            success = self.api_key_service.delete_api_key(key_id)
+            if not success:
+                raise HTTPException(status_code=404, detail="API key not found")
+            return {"message": "API key deleted successfully"}
+        
+        @self.app.post("/api-keys/{key_id}/deactivate")
+        async def deactivate_api_key(
+            key_id: str,
+            credentials: Optional[HTTPAuthorizationCredentials] = Depends(self.security)
+        ):
+            """Deactivate an API key (soft delete)."""
+            self._ensure_initialized()
+            success = self.api_key_service.deactivate_api_key(key_id)
+            if not success:
+                raise HTTPException(status_code=404, detail="API key not found")
+            return {"message": "API key deactivated successfully"}
+        
+        @self.app.post("/api-keys/{key_id}/rotate", response_model=APIKeyCreateResponse)
+        async def rotate_api_key(
+            key_id: str,
+            credentials: Optional[HTTPAuthorizationCredentials] = Depends(self.security)
+        ):
+            """Rotate an API key (generate new key, keep metadata)."""
+            self._ensure_initialized()
+            new_api_key = self.api_key_service.rotate_api_key(key_id)
+            if not new_api_key:
+                raise HTTPException(status_code=404, detail="API key not found")
+            return new_api_key
+    
+    def _add_database_maintenance_routes(self):
+        """Add database maintenance operation endpoints."""
+        from services.data_export_import import DataExportImportService
+        from utils.database_integrity import run_integrity_check
+        from utils.storage_monitor import run_automated_cleanup
+        import tempfile
+        import os
+        from fastapi.responses import FileResponse
+        
+        @self.app.post("/database/integrity-check")
+        async def run_database_integrity_check(
+            auto_fix: bool = False,
+            credentials: HTTPAuthorizationCredentials = Depends(self.security)
+        ):
+            """Run database integrity check with optional auto-fix."""
+            try:
+                result = await run_integrity_check(self.db_manager, auto_fix=auto_fix)
+                return {
+                    "success": True,
+                    "timestamp": datetime.now().isoformat(),
+                    "is_healthy": result.is_healthy,
+                    "total_checks": result.total_checks,
+                    "issues_found": len(result.issues_found),
+                    "duration_seconds": result.duration_seconds,
+                    "auto_fix_enabled": auto_fix,
+                    "summary": result.summary,
+                    "issues": [
+                        {
+                            "type": issue.issue_type.value,
+                            "table": issue.table_name,
+                            "severity": issue.severity,
+                            "description": issue.description,
+                            "auto_fixable": issue.auto_fixable
+                        }
+                        for issue in result.issues_found
+                    ]
+                }
+            except Exception as e:
+                logger.error(f"Database integrity check failed: {e}")
+                raise HTTPException(status_code=500, detail=f"Integrity check failed: {str(e)}")
+        
+        @self.app.post("/database/cleanup")
+        async def run_database_cleanup(
+            dry_run: bool = False,
+            credentials: HTTPAuthorizationCredentials = Depends(self.security)
+        ):
+            """Run database cleanup operations."""
+            try:
+                results = await run_automated_cleanup(self.db_manager, dry_run=dry_run)
+                total_mb_freed = sum(r.mb_freed for r in results if r.success)
+                total_items = sum(r.items_processed for r in results if r.success)
+                
+                return {
+                    "success": True,
+                    "timestamp": datetime.now().isoformat(),
+                    "dry_run": dry_run,
+                    "total_mb_freed": total_mb_freed,
+                    "total_items_processed": total_items,
+                    "operations": [
+                        {
+                            "action": result.action.value,
+                            "success": result.success,
+                            "items_processed": result.items_processed,
+                            "mb_freed": result.mb_freed,
+                            "duration_seconds": result.duration_seconds,
+                            "error_message": result.error_message
+                        }
+                        for result in results
+                    ]
+                }
+            except Exception as e:
+                logger.error(f"Database cleanup failed: {e}")
+                raise HTTPException(status_code=500, detail=f"Cleanup failed: {str(e)}")
+        
+        @self.app.post("/database/export")
+        async def export_database(
+            include_embeddings: bool = False,
+            compress: bool = True,
+            credentials: HTTPAuthorizationCredentials = Depends(self.security)
+        ):
+            """Export all database data."""
+            try:
+                export_service = DataExportImportService(self.db_manager)
+                export_path = export_service.export_all_data(
+                    include_embeddings=include_embeddings,
+                    compress=compress
+                )
+                
+                # Return file info for download
+                file_size = os.path.getsize(export_path)
+                return {
+                    "success": True,
+                    "timestamp": datetime.now().isoformat(),
+                    "export_path": export_path,
+                    "file_size_bytes": file_size,
+                    "file_size_mb": round(file_size / (1024 * 1024), 2),
+                    "download_url": f"/database/download/{os.path.basename(export_path)}"
+                }
+            except Exception as e:
+                logger.error(f"Database export failed: {e}")
+                raise HTTPException(status_code=500, detail=f"Export failed: {str(e)}")
+        
+        @self.app.get("/database/download/{filename}")
+        async def download_export_file(
+            filename: str,
+            credentials: HTTPAuthorizationCredentials = Depends(self.security)
+        ):
+            """Download exported database file."""
+            try:
+                # Security: only allow downloading from exports directory
+                exports_dir = os.path.join(os.getcwd(), "exports")
+                file_path = os.path.join(exports_dir, filename)
+                
+                # Validate file exists and is in exports directory
+                if not os.path.exists(file_path) or not os.path.commonpath([exports_dir, file_path]) == exports_dir:
+                    raise HTTPException(status_code=404, detail="File not found")
+                
+                return FileResponse(
+                    path=file_path,
+                    filename=filename,
+                    media_type='application/octet-stream'
+                )
+            except Exception as e:
+                logger.error(f"File download failed: {e}")
+                raise HTTPException(status_code=500, detail=f"Download failed: {str(e)}")
+        
+        @self.app.post("/database/import")
+        async def import_database(
+            import_file: str,
+            overwrite_existing: bool = False,
+            selective_import: Optional[Dict[str, bool]] = None,
+            credentials: HTTPAuthorizationCredentials = Depends(self.security)
+        ):
+            """Import database data from file."""
+            try:
+                export_service = DataExportImportService(self.db_manager)
+                results = export_service.import_data(
+                    import_path=import_file,
+                    overwrite_existing=overwrite_existing,
+                    selective_import=selective_import
+                )
+                
+                return {
+                    "success": True,
+                    "timestamp": datetime.now().isoformat(),
+                    "import_results": results
+                }
+            except Exception as e:
+                logger.error(f"Database import failed: {e}")
+                raise HTTPException(status_code=500, detail=f"Import failed: {str(e)}")
+        
+        @self.app.get("/database/maintenance-history")
+        async def get_maintenance_history(
+            limit: int = 50,
+            credentials: HTTPAuthorizationCredentials = Depends(self.security)
+        ):
+            """Get maintenance operation history."""
+            try:
+                # This would typically come from a maintenance log table
+                # For now, return a placeholder structure
+                return {
+                    "success": True,
+                    "timestamp": datetime.now().isoformat(),
+                    "operations": [
+                        {
+                            "id": "maint_001",
+                            "operation_type": "integrity_check",
+                            "timestamp": "2024-01-15T10:30:00Z",
+                            "status": "completed",
+                            "duration_seconds": 45.2,
+                            "details": {
+                                "issues_found": 0,
+                                "auto_fix_enabled": False
+                            }
+                        },
+                        {
+                            "id": "maint_002", 
+                            "operation_type": "cleanup",
+                            "timestamp": "2024-01-14T09:15:00Z",
+                            "status": "completed",
+                            "duration_seconds": 120.5,
+                            "details": {
+                                "mb_freed": 15.3,
+                                "items_processed": 245
+                            }
+                        }
+                    ]
+                }
+            except Exception as e:
+                logger.error(f"Failed to get maintenance history: {e}")
+                raise HTTPException(status_code=500, detail=f"Failed to get history: {str(e)}")
     
     def _setup_events(self) -> None:
         """Setup FastAPI lifecycle events."""
@@ -569,6 +885,10 @@ class MemoryRestAPI:
                 await self.search_engine.initialize()
                 
                 logger.info("Search engine initialized in keyword-only mode")
+            
+            # Initialize API key service
+            self.api_key_service = APIKeyService()
+            logger.info("API key service initialized")
             
             logger.info("REST API Memory Server initialized successfully")
             

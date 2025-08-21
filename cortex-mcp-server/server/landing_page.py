@@ -107,6 +107,12 @@ def create_landing_router() -> APIRouter:
         </div>
         
         <div class="links">
+            <a href="/ui" class="link-card">
+                <span class="link-icon">🧠</span>
+                <div class="link-title">Enhanced Web Interface</div>
+                <div class="link-desc">Modern, responsive web interface for managing memories and projects</div>
+            </a>
+            
             <a href="/monitoring/" class="link-card">
                 <span class="link-icon">📊</span>
                 <div class="link-title">Monitoring Dashboard</div>

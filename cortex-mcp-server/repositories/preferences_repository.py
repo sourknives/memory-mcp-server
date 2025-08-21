@@ -274,6 +274,35 @@ class PreferencesRepository:
             logger.error(f"Failed to list preferences: {e}")
             raise DatabaseConnectionError(f"Failed to list preferences: {e}") from e
 
+    def get_all(self, category: Optional[str] = None) -> List[Preference]:
+        """
+        Get all preferences, optionally filtered by category.
+        
+        Args:
+            category: Optional category filter
+            
+        Returns:
+            List[Preference]: List of preferences
+            
+        Raises:
+            DatabaseConnectionError: If database operation fails
+        """
+        try:
+            with self.db_manager.get_session() as session:
+                query = session.query(Preference)
+                
+                if category:
+                    query = query.filter(Preference.category == category)
+                
+                preferences = query.order_by(Preference.key).all()
+                
+                logger.debug(f"Retrieved {len(preferences)} preferences (category={category})")
+                return preferences
+                
+        except SQLAlchemyError as e:
+            logger.error(f"Failed to get all preferences: {e}")
+            raise DatabaseConnectionError(f"Failed to get all preferences: {e}") from e
+
     def get_by_category(self, category: PreferenceCategory, limit: int = 100) -> List[Preference]:
         """
         Get preferences by category.

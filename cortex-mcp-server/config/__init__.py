@@ -5,7 +5,7 @@ This package contains database configuration, connection management,
 configuration management with hot-reload, and other system configuration utilities.
 """
 
-from database import (
+from .database import (
     DatabaseConfig,
     DatabaseManager,
     DatabaseError,
@@ -15,7 +15,7 @@ from database import (
     reset_database_manager,
 )
 
-from config_manager import (
+from .config_manager import (
     AppConfig,
     ServerConfig,
     AIModelsConfig,
@@ -33,7 +33,7 @@ from config_manager import (
     reset_config_manager,
 )
 
-from model_manager import (
+from .model_manager import (
     ModelManager,
     ModelMetadata,
     ModelDownloadError,
@@ -42,7 +42,7 @@ from model_manager import (
     reset_model_manager,
 )
 
-from security_config import (
+from .security_config import (
     SecurityConfig as LegacySecurityConfig,
     EncryptionConfig,
     AuthenticationConfig,

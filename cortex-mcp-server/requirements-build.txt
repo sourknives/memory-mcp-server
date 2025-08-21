@@ -1,0 +1,3 @@
+# Build dependencies for Cortex MCP Server web interface optimization
+jsmin>=3.0.1
+cssmin>=0.2.0

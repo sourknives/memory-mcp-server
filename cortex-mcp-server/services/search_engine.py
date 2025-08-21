@@ -9,7 +9,12 @@ import time
 from datetime import datetime
 from typing import Dict, List, Optional, Set, Tuple, Union
 
-from vector_store import VectorStore
+# Add parent directory to path for imports
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+
+from .vector_store import VectorStore
 from utils.error_handling import (
     graceful_degradation, 
     retry_with_backoff, 
